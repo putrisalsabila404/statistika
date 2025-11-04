@@ -2,10 +2,270 @@ import React, { useState, useMemo, useEffect, useRef, useCallback, createElement
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Calculator, TrendingUp, PieChart as PieIcon, BookOpen, BrainCircuit, BarChartHorizontal, Award, RefreshCw, Check, X, Menu, ArrowLeft } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { gsap } from 'https://cdn.skypack.dev/gsap'; // Impor GSAP dari CDN
-// HAPUS: Impor THREE.js
+import { gsap } from 'gsap';
+import { InertiaPlugin } from 'gsap/InertiaPlugin';
 
-// Komponen Confetti (dari App.jsx asli)
+gsap.registerPlugin(InertiaPlugin);
+
+// Utility functions untuk DotGrid
+const throttle = (func, limit) => {
+  let lastCall = 0;
+  return function (...args) {
+    const now = performance.now();
+    if (now - lastCall >= limit) {
+      lastCall = now;
+      func.apply(this, args);
+    }
+  };
+};
+
+function hexToRgb(hex) {
+  const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!m) return { r: 0, g: 0, b: 0 };
+  return {
+    r: parseInt(m[1], 16),
+    g: parseInt(m[2], 16),
+    b: parseInt(m[3], 16)
+  };
+}
+
+// Komponen DotGrid Background
+// Komponen DotGrid Background
+const DotGrid = ({
+  dotSize = 16,
+  gap = 32,
+  baseColor = '#5227FF',
+  activeColor = '#5227FF',
+  proximity = 150,
+  speedTrigger = 100,
+  shockRadius = 250,
+  shockStrength = 5,
+  maxSpeed = 5000,
+  resistance = 750,
+  returnDuration = 1.5,
+  className = '',
+  style
+}) => {
+  const wrapperRef = useRef(null);
+  const canvasRef = useRef(null);
+  const dotsRef = useRef([]);
+  const pointerRef = useRef({
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    speed: 0,
+    lastTime: 0,
+    lastX: 0,
+    lastY: 0
+  });
+
+  const baseRgb = useMemo(() => hexToRgb(baseColor), [baseColor]);
+  const activeRgb = useMemo(() => hexToRgb(activeColor), [activeColor]);
+
+  const circlePath = useMemo(() => {
+    if (typeof window === 'undefined' || !window.Path2D) return null;
+    const p = new Path2D();
+    p.arc(0, 0, dotSize / 2, 0, Math.PI * 2);
+    return p;
+  }, [dotSize]);
+
+  const buildGrid = useCallback(() => {
+    const wrap = wrapperRef.current;
+    const canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+
+    const { width, height } = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.scale(dpr, dpr);
+
+    const cols = Math.floor((width + gap) / (dotSize + gap));
+    const rows = Math.floor((height + gap) / (dotSize + gap));
+    const cell = dotSize + gap;
+
+    const gridW = cell * cols - gap;
+    const gridH = cell * rows - gap;
+
+    const extraX = width - gridW;
+    const extraY = height - gridH;
+
+    const startX = extraX / 2 + dotSize / 2;
+    const startY = extraY / 2 + dotSize / 2;
+
+    const dots = [];
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const cx = startX + x * cell;
+        const cy = startY + y * cell;
+        dots.push({ cx, cy, xOffset: 0, yOffset: 0, _inertiaApplied: false });
+      }
+    }
+    dotsRef.current = dots;
+  }, [dotSize, gap]);
+
+  useEffect(() => {
+    if (!circlePath) return;
+
+    let rafId;
+    const proxSq = proximity * proximity;
+
+    const draw = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const { x: px, y: py } = pointerRef.current;
+
+      for (const dot of dotsRef.current) {
+        const ox = dot.cx + dot.xOffset;
+        const oy = dot.cy + dot.yOffset;
+        const dx = dot.cx - px;
+        const dy = dot.cy - py;
+        const dsq = dx * dx + dy * dy;
+
+        let style = baseColor;
+        if (dsq <= proxSq) {
+          const dist = Math.sqrt(dsq);
+          const t = 1 - dist / proximity;
+          const r = Math.round(baseRgb.r + (activeRgb.r - baseRgb.r) * t);
+          const g = Math.round(baseRgb.g + (activeRgb.g - baseRgb.g) * t);
+          const b = Math.round(baseRgb.b + (activeRgb.b - baseRgb.b) * t);
+          style = `rgb(${r},${g},${b})`;
+        }
+
+        ctx.save();
+        ctx.translate(ox, oy);
+        ctx.fillStyle = style;
+        ctx.fill(circlePath);
+        ctx.restore();
+      }
+
+      rafId = requestAnimationFrame(draw);
+    };
+
+    draw();
+    return () => cancelAnimationFrame(rafId);
+  }, [proximity, baseColor, activeRgb, baseRgb, circlePath]);
+
+  useEffect(() => {
+    buildGrid();
+    let ro = null;
+    if ('ResizeObserver' in window) {
+      ro = new ResizeObserver(buildGrid);
+      wrapperRef.current && ro.observe(wrapperRef.current);
+    } else {
+      window.addEventListener('resize', buildGrid);
+    }
+    return () => {
+      if (ro) ro.disconnect();
+      else window.removeEventListener('resize', buildGrid);
+    };
+  }, [buildGrid]);
+
+  useEffect(() => {
+    const onMove = e => {
+      const now = performance.now();
+      const pr = pointerRef.current;
+      const dt = pr.lastTime ? now - pr.lastTime : 16;
+      const dx = e.clientX - pr.lastX;
+      const dy = e.clientY - pr.lastY;
+      let vx = (dx / dt) * 1000;
+      let vy = (dy / dt) * 1000;
+      let speed = Math.hypot(vx, vy);
+      if (speed > maxSpeed) {
+        const scale = maxSpeed / speed;
+        vx *= scale;
+        vy *= scale;
+        speed = maxSpeed;
+      }
+      pr.lastTime = now;
+      pr.lastX = e.clientX;
+      pr.lastY = e.clientY;
+      pr.vx = vx;
+      pr.vy = vy;
+      pr.speed = speed;
+
+      const rect = canvasRef.current.getBoundingClientRect();
+      pr.x = e.clientX - rect.left;
+      pr.y = e.clientY - rect.top;
+
+      for (const dot of dotsRef.current) {
+        const dist = Math.hypot(dot.cx - pr.x, dot.cy - pr.y);
+        if (speed > speedTrigger && dist < proximity && !dot._inertiaApplied) {
+          dot._inertiaApplied = true;
+          gsap.killTweensOf(dot);
+          const pushX = dot.cx - pr.x + vx * 0.005;
+          const pushY = dot.cy - pr.y + vy * 0.005;
+          gsap.to(dot, {
+            inertia: { xOffset: pushX, yOffset: pushY, resistance },
+            onComplete: () => {
+              gsap.to(dot, {
+                xOffset: 0,
+                yOffset: 0,
+                duration: returnDuration,
+                ease: 'elastic.out(1,0.75)'
+              });
+              dot._inertiaApplied = false;
+            }
+          });
+        }
+      }
+    };
+
+    const onClick = e => {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      for (const dot of dotsRef.current) {
+        const dist = Math.hypot(dot.cx - cx, dot.cy - cy);
+        if (dist < shockRadius && !dot._inertiaApplied) {
+          dot._inertiaApplied = true;
+          gsap.killTweensOf(dot);
+          const falloff = Math.max(0, 1 - dist / shockRadius);
+          const pushX = (dot.cx - cx) * shockStrength * falloff;
+          const pushY = (dot.cy - cy) * shockStrength * falloff;
+          gsap.to(dot, {
+            inertia: { xOffset: pushX, yOffset: pushY, resistance },
+            onComplete: () => {
+              gsap.to(dot, {
+                xOffset: 0,
+                yOffset: 0,
+                duration: returnDuration,
+                ease: 'elastic.out(1,0.75)'
+              });
+              dot._inertiaApplied = false;
+            }
+          });
+        }
+      }
+    };
+
+    const throttledMove = throttle(onMove, 50);
+    window.addEventListener('mousemove', throttledMove, { passive: true });
+    window.addEventListener('click', onClick);
+
+    return () => {
+      window.removeEventListener('mousemove', throttledMove);
+      window.removeEventListener('click', onClick);
+    };
+  }, [maxSpeed, speedTrigger, proximity, resistance, returnDuration, shockRadius, shockStrength]);
+
+  return (
+    <div ref={wrapperRef} className={`absolute inset-0 ${className}`} style={style}>
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+    </div>
+  );
+};
+
+// Komponen Confetti
 const Confetti = () => {
   const confettiCount = 150;
   const confetti = useMemo(() => {
@@ -23,7 +283,7 @@ const Confetti = () => {
   return <div className="confetti-container">{confetti}</div>;
 };
 
-// Kalkulator Statistik (Di-retheme untuk mode gelap)
+// Kalkulator Statistik (Versi lengkap dari file pertama)
 const KalkulatorStatistik = () => {
   const [inputValue, setInputValue] = useState('85, 92, 78, 90, 88, 76, 95, 88, 79');
   const [stats, setStats] = useState(null);
@@ -37,24 +297,20 @@ const KalkulatorStatistik = () => {
       .filter(n => n.trim() !== '')
       .map(Number)
       .filter(n => !isNaN(n));
-
     if (numbers.length === 0) {
       setError('Input tidak valid. Harap masukkan angka yang valid.');
       return;
     }
-
     const n = numbers.length;
     const sum = numbers.reduce((a, b) => a + b, 0);
     const mean = sum / n;
     numbers.sort((a, b) => a - b);
     const mid = Math.floor(n / 2);
     const median = n % 2 !== 0 ? numbers[mid] : (numbers[mid - 1] + numbers[mid]) / 2;
-
     const freqMap = numbers.reduce((acc, val) => {
       acc[val] = (acc[val] || 0) + 1;
       return acc;
     }, {});
-
     let maxFreq = 0;
     let modus = [];
     for (const key in freqMap) {
@@ -65,15 +321,30 @@ const KalkulatorStatistik = () => {
         modus.push(Number(key));
       }
     }
-
     const allUnique = Object.values(freqMap).every(freq => freq === 1);
     const modusStr = allUnique && n > 1 ? 'Tidak ada' : modus.join(', ');
-
     const min = numbers[0];
     const max = numbers[n - 1];
-    const range = max - min;
-    const variance = n > 1 ? numbers.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (n - 1) : 0;
-    const stdDev = n > 1 ? Math.sqrt(variance) : 0;
+
+    // === FUNGSI UKURAN LETAK ===
+    const calculateQuantile = (position) => {
+      if (n === 0) return 'N/A';
+      const intPart = Math.floor(position);
+      const fracPart = position - intPart;
+      if (position < 1) return numbers[0];
+      if (intPart >= n) return numbers[n - 1];
+      if (fracPart === 0) return numbers[intPart - 1];
+      const lower = numbers[intPart - 1];
+      const upper = numbers[intPart];
+      if (upper === undefined) return lower;
+      return lower + fracPart * (upper - lower);
+    };
+
+    const q1 = calculateQuantile(1 * (n + 1) / 4);
+    const q2 = median;
+    const q3 = calculateQuantile(3 * (n + 1) / 4);
+    const d7 = calculateQuantile(7 * (n + 1) / 10);
+    const p40 = calculateQuantile(40 * (n + 1) / 100);
 
     setStats({
       count: n,
@@ -83,9 +354,11 @@ const KalkulatorStatistik = () => {
       modus: modusStr,
       min: min.toLocaleString('id-ID'),
       max: max.toLocaleString('id-ID'),
-      range: range.toLocaleString('id-ID'),
-      variance: n > 1 ? variance.toFixed(2) : 'N/A',
-      stdDev: n > 1 ? stdDev.toFixed(2) : 'N/A'
+      q1: typeof q1 === 'number' ? q1.toFixed(2) : 'N/A',
+      q2: typeof q2 === 'number' ? q2.toFixed(2) : 'N/A',
+      q3: typeof q3 === 'number' ? q3.toFixed(2) : 'N/A',
+      d7: typeof d7 === 'number' ? d7.toFixed(2) : 'N/A',
+      p40: typeof p40 === 'number' ? p40.toFixed(2) : 'N/A'
     });
   };
 
@@ -145,12 +418,14 @@ const KalkulatorStatistik = () => {
             <StatCard title="Total (Σx)" value={stats.sum} color="gray" />
             <StatCard title="Nilai Minimum" value={stats.min} color="blue" />
             <StatCard title="Nilai Maksimum" value={stats.max} color="blue" />
-            <StatCard title="Range (Jangkauan)" value={stats.range} color="blue" />
             <StatCard title="Mean (Rata-rata)" value={stats.mean} color="green" />
             <StatCard title="Median" value={stats.median} color="green" />
             <StatCard title="Modus" value={stats.modus} color="green" />
-            <StatCard title="Varians (s²)" value={stats.variance} color="purple" />
-            <StatCard title="Std. Deviasi (s)" value={stats.stdDev} color="purple" />
+            <StatCard title="Kuartil 1 (Q1)" value={stats.q1} color="purple" />
+            <StatCard title="Kuartil 2 (Q2)" value={stats.q2} color="purple" />
+            <StatCard title="Kuartil 3 (Q3)" value={stats.q3} color="purple" />
+            <StatCard title="Desil 7 (D7)" value={stats.d7} color="blue" />
+            <StatCard title="Persentil 40 (P40)" value={stats.p40} color="blue" />
           </div>
         </div>
       )}
@@ -158,10 +433,7 @@ const KalkulatorStatistik = () => {
   );
 };
 
-
-// ==================================================================
-// KOMPONEN BENTO BARU (Hanya React + Tailwind + Framer Motion)
-// ==================================================================
+// Komponen BentoCard dan TextType tetap sama seperti file asli
 const BentoCard = ({ icon, title, description, onClick }) => {
   return (
     <motion.div
@@ -170,15 +442,12 @@ const BentoCard = ({ icon, title, description, onClick }) => {
       className="relative bg-gray-900/70 border border-gray-700 rounded-2xl p-5 transition-all duration-300 hover:border-purple-500 hover:shadow-2xl hover:shadow-purple-700/20 cursor-pointer overflow-hidden aspect-[4/3] flex flex-col justify-between group"
       onClick={onClick}
     >
-      {/* Efek glow radial saat hover */}
       <div 
         className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
         style={{
           background: 'radial-gradient(circle at 50% 50%, rgba(132, 0, 255, 0.15) 0%, transparent 70%)'
         }} 
       />
-      
-      {/* Konten Kartu */}
       <div className="relative z-10 text-purple-400">
         {icon}
       </div>
@@ -189,13 +458,7 @@ const BentoCard = ({ icon, title, description, onClick }) => {
     </motion.div>
   );
 };
-// ==================================================================
-// AKHIR KOMPONEN BENTO BARU
-// ==================================================================
 
-// ==================================================================
-// KOMPONEN TEXTTYPE BARU
-// ==================================================================
 const TextType = ({
   text,
   as: Component = 'div',
@@ -224,23 +487,18 @@ const TextType = ({
   const [isVisible, setIsVisible] = useState(!startOnVisible);
   const cursorRef = useRef(null);
   const containerRef = useRef(null);
-
   const textArray = useMemo(() => (Array.isArray(text) ? text : [text]), [text]);
-
   const getRandomSpeed = useCallback(() => {
     if (!variableSpeed) return typingSpeed;
     const { min, max } = variableSpeed;
     return Math.random() * (max - min) + min;
   }, [variableSpeed, typingSpeed]);
-
   const getCurrentTextColor = () => {
     if (textColors.length === 0) return;
     return textColors[currentTextIndex % textColors.length];
   };
-
   useEffect(() => {
     if (!startOnVisible || !containerRef.current) return;
-
     const observer = new IntersectionObserver(
       entries => {
         entries.forEach(entry => {
@@ -251,11 +509,9 @@ const TextType = ({
       },
       { threshold: 0.1 }
     );
-
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, [startOnVisible]);
-
   useEffect(() => {
     if (showCursor && cursorRef.current) {
       gsap.set(cursorRef.current, { opacity: 1 });
@@ -268,15 +524,11 @@ const TextType = ({
       });
     }
   }, [showCursor, cursorBlinkDuration]);
-
   useEffect(() => {
     if (!isVisible) return;
-
     let timeout;
-
     const currentText = textArray[currentTextIndex];
     const processedText = reverseMode ? currentText.split('').reverse().join('') : currentText;
-
     const executeTypingAnimation = () => {
       if (isDeleting) {
         if (displayedText === '') {
@@ -284,11 +536,9 @@ const TextType = ({
           if (currentTextIndex === textArray.length - 1 && !loop) {
             return;
           }
-
           if (onSentenceComplete) {
             onSentenceComplete(textArray[currentTextIndex], currentTextIndex);
           }
-
           setCurrentTextIndex(prev => (prev + 1) % textArray.length);
           setCurrentCharIndex(0);
           timeout = setTimeout(() => {}, pauseDuration);
@@ -313,15 +563,12 @@ const TextType = ({
         }
       }
     };
-
     if (currentCharIndex === 0 && !isDeleting && displayedText === '') {
       timeout = setTimeout(executeTypingAnimation, initialDelay);
     } else {
       executeTypingAnimation();
     }
-
     return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentCharIndex,
     displayedText,
@@ -338,10 +585,8 @@ const TextType = ({
     variableSpeed,
     onSentenceComplete
   ]);
-
   const shouldHideCursor =
     hideCursorWhileTyping && (currentCharIndex < textArray[currentTextIndex].length || isDeleting);
-
   return createElement(
     Component,
     {
@@ -362,24 +607,15 @@ const TextType = ({
     )
   );
 };
-// ==================================================================
-// AKHIR KOMPONEN TEXTTYPE
-// ==================================================================
-
-// ==================================================================
-// HAPUS: Seluruh komponen LiquidEther (ratusan baris) dihapus dari sini
-// ==================================================================
-
 
 const App = () => {
   const [activeTab, setActiveTab] = useState('home'); 
   const [activeSubMenu, setActiveSubMenu] = useState(null); 
   const [currentQuiz, setCurrentQuiz] = useState(null);
-  const [currentQuizIndex, setCurrentQuizIndex] = useState(0); // Menambahkan state ini
+  const [currentQuizIndex, setCurrentQuizIndex] = useState(0); 
   const [userAnswers, setUserAnswers] = useState({});
   const [showResults, setShowResults] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
-
   const [interactiveData, setInteractiveData] = useState([
     { nilai: 60, frekuensi: 5 },
     { nilai: 70, frekuensi: 8 },
@@ -387,10 +623,9 @@ const App = () => {
     { nilai: 90, frekuensi: 7 },
     { nilai: 100, frekuensi: 3 }
   ]);
-  
   const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
-  // MODIFIKASI: Materi di-retheme untuk mode gelap
+  // === MATERI TETAP UTUH ===
   const materi = {
     pengenalan: {
       pengertian: {
@@ -564,7 +799,7 @@ const App = () => {
       kuartil: {
         title: 'Kuartil (Data Tunggal)',
         content: `
-          <h3 class="text-2xl font-bold mb-4">Kuartil (Data Tunggal)</h3>
+
           <div class="bg-blue-900/30 border border-blue-800 p-4 rounded-lg mb-4">
             <p class="font-semibold mb-2 text-gray-300">Kuartil adalah nilai yang membagi sekumpulan data yang telah diurutkan menjadi empat bagian yang sama besar.</p>
             <ul class="list-disc list-inside mt-2 space-y-1 text-gray-300">
@@ -573,7 +808,6 @@ const App = () => {
               <li><strong>Kuartil Atas (Q3):</strong> Membatasi 75% data terbawah (atau 25% data teratas)</li>
             </ul>
           </div>
-          
           <h4 class="font-bold text-xl mb-3">Langkah Menghitung Kuartil (Data Tunggal):</h4>
           <ol class="list-decimal list-inside space-y-2 mb-4 bg-gray-800/60 p-4 rounded-lg text-gray-300">
             <li>Urutkan data dari yang terkecil hingga terbesar.</li>
@@ -583,25 +817,25 @@ const App = () => {
             <p class="text-center text-xl font-mono text-white">Letak Q<sub>i</sub> = i * (n + 1) / 4</p>
             <p class="text-center text-sm text-gray-400 mt-2">i = 1, 2, atau 3 | n = jumlah data</p>
           </div>
+          <div class="bg-gray-800 p-3 rounded shadow-sm mb-4 border border-blue-700">
+            <p class="text-center text-xl font-mono text-white">Nilai Q<sub>i</sub> = Data ke-x + d * (Data ke-(x+1) - Data ke-x)</p>
+            <p class="text-center text-sm text-gray-400 mt-2">x = Bagian bulat dari letak Q<sub>i</sub> | d = Bagian desimal</p>
+          </div>
           <p class="mb-4 text-gray-300">Jika letak Q<sub>i</sub> adalah bilangan desimal (misal 2.25), nilainya dihitung menggunakan interpolasi:</p>
           <p class="font-mono bg-gray-900 p-2 rounded mb-4 text-sm text-gray-300">Nilai Q<sub>i</sub> = Data ke-X + D * (Data ke-(X+1) - Data ke-X)</p>
           <p class="mb-2 text-gray-300"><span class="font-mono text-purple-300">X</span> = Bagian bulat dari letak Q<sub>i</sub> (misal 2 dari 2.25)</p>
           <p class="mb-2 text-gray-300"><span class="font-mono text-purple-300">D</span> = Bagian desimal dari letak Q<sub>i</sub> (misal 0.25 dari 2.25)</p>
-
           <h4 class="font-bold text-xl mb-3 mt-6">Contoh:</h4>
           <div class="bg-gray-800/60 p-4 rounded-lg mb-4 text-gray-300">
             <p class="mb-2 font-semibold">Data terurut: 2, 5, 5, 6, 7, 8, 9, 12 (n=8)</p>
-            
             <p class="mb-2 mt-4 font-bold text-blue-300">Mencari Q1 (i=1):</p>
             <p class="mb-2 font-mono">Letak Q1 = 1 * (8 + 1) / 4 = 9 / 4 = 2.25</p>
             <p class="mb-2">Data ke-2 (X=2) + 0.25 (D=0.25) * (Data ke-3 - Data ke-2)</p>
             <p class="mb-2">Nilai Q1 = 5 + 0.25 * (5 - 5) = 5 + 0 = <strong class="text-white">5</strong></p>
-
             <p class="mb-2 mt-4 font-bold text-blue-300">Mencari Q2 (i=2) / Median:</p>
             <p class="mb-2 font-mono">Letak Q2 = 2 * (8 + 1) / 4 = 18 / 4 = 4.5</p>
             <p class="mb-2">Data ke-4 (X=4) + 0.5 (D=0.5) * (Data ke-5 - Data ke-4)</p>
             <p class="mb-2">Nilai Q2 = 6 + 0.5 * (7 - 6) = 6 + 0.5 = <strong class="text-white">6.5</strong></p>
-
             <p class="mb-2 mt-4 font-bold text-blue-300">Mencari Q3 (i=3):</p>
             <p class="mb-2 font-mono">Letak Q3 = 3 * (8 + 1) / 4 = 27 / 4 = 6.75</p>
             <p class="mb-2">Data ke-6 (X=6) + 0.75 (D=0.75) * (Data ke-7 - Data ke-6)</p>
@@ -612,12 +846,10 @@ const App = () => {
       desil: {
         title: 'Desil (Data Tunggal)',
         content: `
-          <h3 class="text-2xl font-bold mb-4">Desil (Data Tunggal)</h3>
           <div class="bg-green-900/30 border border-green-800 p-4 rounded-lg mb-4 text-gray-300">
             <p class="font-semibold mb-2">Desil adalah nilai yang membagi sekumpulan data yang telah diurutkan menjadi sepuluh bagian yang sama besar.</p>
             <p>Ada 9 nilai desil, yaitu D<sub>1</sub>, D<sub>2</sub>, ..., D<sub>9</sub>.</p>
           </div>
-          
           <h4 class="font-bold text-xl mb-3">Langkah Menghitung Desil (Data Tunggal):</h4>
           <ol class="list-decimal list-inside space-y-2 mb-4 bg-gray-800/60 p-4 rounded-lg text-gray-300">
             <li>Urutkan data dari yang terkecil hingga terbesar.</li>
@@ -627,12 +859,14 @@ const App = () => {
             <p class="text-center text-xl font-mono text-white">Letak D<sub>i</sub> = i * (n + 1) / 10</p>
             <p class="text-center text-sm text-gray-400 mt-2">i = 1, 2, ..., 9 | n = jumlah data</p>
           </div>
+          <div class="bg-gray-800 p-3 rounded shadow-sm mb-4 border border-green-700">
+            <p class="text-center text-xl font-mono text-white">Nilai D<sub>i</sub> = Data ke-x + d * (Data ke-(x+1) - Data ke-x)</p>
+            <p class="text-center text-sm text-gray-400 mt-2">x = Bagian bulat dari letak D<sub>i</sub> | d = Bagian desimal</p>
+          </div>
           <p class="mb-4 text-gray-300">Sama seperti kuartil, jika letaknya desimal, gunakan interpolasi linear.</p>
-
           <h4 class="font-bold text-xl mb-3 mt-6">Contoh:</h4>
           <div class="bg-gray-800/60 p-4 rounded-lg mb-4 text-gray-300">
             <p class="mb-2 font-semibold">Data terurut: 2, 5, 5, 6, 7, 8, 9, 12, 13, 15 (n=10)</p>
-            
             <p class="mb-2 mt-4 font-bold text-green-300">Mencari D<sub>7</sub> (i=7):</p>
             <p class="mb-2 font-mono">Letak D7 = 7 * (10 + 1) / 10 = 77 / 10 = 7.7</p>
             <p class="mb-2">Data ke-7 (X=7) + 0.7 (D=0.7) * (Data ke-8 - Data ke-7)</p>
@@ -649,7 +883,6 @@ const App = () => {
             <p class="font-semibold mb-2">Persentil adalah nilai yang membagi sekumpulan data yang telah diurutkan menjadi seratus bagian yang sama besar.</p>
             <p>Ada 99 nilai persentil, yaitu P<sub>1</sub>, P<sub>2</sub>, ..., P<sub>99</sub>.</p>
           </div>
-          
           <h4 class="font-bold text-xl mb-3">Langkah Menghitung Persentil (Data Tunggal):</h4>
           <ol class="list-decimal list-inside space-y-2 mb-4 bg-gray-800/60 p-4 rounded-lg text-gray-300">
             <li>Urutkan data dari yang terkecil hingga terbesar.</li>
@@ -659,12 +892,14 @@ const App = () => {
             <p class="text-center text-xl font-mono text-white">Letak P<sub>i</sub> = i * (n + 1) / 100</p>
             <p class="text-center text-sm text-gray-400 mt-2">i = 1, 2, ..., 99 | n = jumlah data</p>
           </div>
+          <div class="bg-gray-800 p-3 rounded shadow-sm mb-4 border border-purple-700">
+            <p class="text-center text-xl font-mono text-white">Nilai P<sub>i</sub> = Data ke-x + d * (Data ke-(x+1) - Data ke-x)</p>
+            <p class="text-center text-sm text-gray-400 mt-2">x = Bagian bulat dari letak P<sub>i</sub> | d = Bagian desimal</p>
+          </div>
           <p class="mb-4 text-gray-300">Interpolasi linear juga digunakan jika letaknya desimal.</p>
-
           <h4 class="font-bold text-xl mb-3 mt-6">Contoh:</h4>
           <div class="bg-gray-800/60 p-4 rounded-lg mb-4 text-gray-300">
             <p class="mb-2 font-semibold">Data terurut: 2, 5, 5, 6, 7, 8, 9, 12, 13, 15 (n=10)</p>
-            
             <p class="mb-2 mt-4 font-bold text-purple-300">Mencari P<sub>40</sub> (i=40):</p>
             <p class="mb-2 font-mono">Letak P40 = 40 * (10 + 1) / 100 = 440 / 100 = 4.4</p>
             <p class="mb-2">Data ke-4 (X=4) + 0.4 (D=0.4) * (Data ke-5 - Data ke-4)</p>
@@ -755,17 +990,14 @@ const App = () => {
   };
 
   const activeQuizData = currentQuiz ? quizSets[currentQuiz].questions : [];
-
   const handleAnswer = (questionIndex, answerIndex) => {
     setUserAnswers(prev => ({ ...prev, [questionIndex]: answerIndex }));
   };
-
   const calculateScore = () => {
     return activeQuizData.reduce((acc, quiz, index) => {
       return userAnswers[index] === quiz.correct ? acc + 1 : acc;
     }, 0);
   };
-
   const handleSubmitQuiz = () => {
     setShowResults(true);
     const score = calculateScore();
@@ -775,21 +1007,18 @@ const App = () => {
       setTimeout(() => setShowConfetti(false), 5000);
     }
   };
-
   const resetQuiz = () => {
     setUserAnswers({});
     setShowResults(false);
     setCurrentQuizIndex(0);
     setShowConfetti(false);
   };
-
   const startQuiz = (quizId) => {
     setActiveTab('kuis');
     setCurrentQuiz(quizId);
     resetQuiz();
   };
-  
-  // MODIFIKASI: Menggunakan menuItems untuk bento grid
+
   const menuItems = [
     { id: 'pengenalan', label: 'Pengenalan Statistika', icon: <BookOpen className="w-5 h-5" />, subMenus: [{ id: 'pengertian', label: 'Pengertian' }, { id: 'jenisData', label: 'Jenis Data' }] },
     { id: 'ukuranPemusatan', label: 'Ukuran Pemusatan', icon: <Calculator className="w-5 h-5" />, subMenus: [{ id: 'mean', label: 'Mean' }, { id: 'median', label: 'Median' }, { id: 'modus', label: 'Modus' }] },
@@ -799,7 +1028,6 @@ const App = () => {
     { id: 'kuis', label: 'Uji Pemahaman', icon: <BrainCircuit className="w-5 h-5" />, subMenus: [{ id: 'pemahaman', label: 'Kuis Pemahaman' }, { id: 'latihan1', label: 'Latihan 1' }, { id: 'latihan2', label: 'Latihan 2' }, { id: 'latihan3', label: 'Latihan 3' }] }
   ];
 
-  // MODIFIKASI: Data untuk MagicBento
   const bentoCards = menuItems.map(item => ({
     id: item.id,
     icon: item.icon,
@@ -808,12 +1036,10 @@ const App = () => {
     label: item.id.charAt(0).toUpperCase() + item.id.slice(1)
   }));
 
-  // MODIFIKASI: Handler klik untuk bento
   const handleCardClick = (card) => {
     handleMenuClick(card.id);
   };
 
-  // MODIFIKASI: Handler klik menu utama
   const handleMenuClick = (itemId, subMenuId = null) => {
     setActiveTab(itemId);
     if(itemId === 'kuis') {
@@ -824,7 +1050,6 @@ const App = () => {
         setActiveSubMenu(targetSubMenuId);
         setCurrentQuiz(null);
     } else {
-        // Untuk item tanpa submenu seperti 'interaktif'
         setCurrentQuiz(null);
         setActiveSubMenu(null);
     }
@@ -835,19 +1060,15 @@ const App = () => {
       return acc.concat(Array(item.frekuensi).fill(item.nilai));
     }, []);
     if (flatData.length === 0) return { mean: 'N/A', median: 'N/A', modus: 'N/A' };
-
     const sum = flatData.reduce((acc, val) => acc + val, 0);
     const mean = (sum / flatData.length).toFixed(2);
-
     flatData.sort((a, b) => a - b);
     const mid = Math.floor(flatData.length / 2);
     const median = flatData.length % 2 !== 0 ? flatData[mid] : ((flatData[mid - 1] + flatData[mid]) / 2).toFixed(2);
-
     const frequencyMap = flatData.reduce((acc, val) => {
       acc[val] = (acc[val] || 0) + 1;
       return acc;
     }, {});
-
     let maxFreq = 0;
     let modus = [];
     for (const key in frequencyMap) {
@@ -860,7 +1081,6 @@ const App = () => {
     }
     const allUnique = Object.values(frequencyMap).every(f => f === 1);
     const modusStr = allUnique && flatData.length > 1 ? 'N/A' : modus.join(', ');
-
     return { mean, median, modus: modusStr };
   }, [interactiveData]);
 
@@ -886,8 +1106,18 @@ const App = () => {
     setInteractiveData(updatedData);
   };
 
+  // === EDITABLE LABEL NILAI ===
+  const handleNilaiChange = (index, newNilai) => {
+    const updatedData = interactiveData.map((item, i) => {
+      if (i === index) {
+        return { ...item, nilai: newNilai === '' ? 0 : Number(newNilai) };
+      }
+      return item;
+    });
+    setInteractiveData(updatedData);
+  };
+
   const renderContent = () => {
-    // MODIFIKASI: Tampilkan bento grid saat 'home'
     if (activeTab === 'home') {
       return (
         <div className="relative z-10 flex flex-col items-center justify-center">
@@ -898,8 +1128,6 @@ const App = () => {
             >
               Selamat Datang di
             </motion.h2>
-            
-            {/* --- INTEGRASI TEXTTYPE DIMULAI DI SINI --- */}
             <TextType
               as="h1"
               text={[
@@ -911,12 +1139,9 @@ const App = () => {
               pauseDuration={2000}
               deletingSpeed={50}
               loop={true}
-              className="text-4xl sm:text-6xl font-bold text-center mb-10 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-400 min-h-[70px] sm:min-h-[90px]" // Sesuaikan min-height
+              className="text-4xl sm:text-6xl font-bold text-center mb-10 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-400 min-h-[70px] sm:min-h-[90px]"
               cursorClassName="text-purple-400 text-4xl sm:text-6xl"
             />
-            {/* --- INTEGRASI TEXTTYPE SELESAI --- */}
-            
-            {/* Render Grid Bento BARU */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto">
               {bentoCards.map(card => (
                 <BentoCard
@@ -931,11 +1156,9 @@ const App = () => {
         </div>
       );
     }
-
     if (activeTab === 'visualisasi' && activeSubMenu === 'kalkulator') {
       return <KalkulatorStatistik />;
     }
-
     if (activeTab === 'interaktif') {
       return (
         <div>
@@ -954,7 +1177,16 @@ const App = () => {
                     className="bg-gray-800/60 rounded-lg p-4 border border-gray-700"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-md font-semibold text-gray-200">Nilai {item.nilai}:</label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-md font-semibold text-gray-200">Nilai</span>
+                        <input
+                          type="number"
+                          value={item.nilai}
+                          onChange={(e) => handleNilaiChange(index, e.target.value)}
+                          className="w-16 px-2 py-1 border border-purple-500 rounded-md text-center font-semibold text-purple-300 bg-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                        <span className="text-md font-semibold text-gray-200">:</span>
+                      </div>
                       <input
                         type="number"
                         value={item.frekuensi}
@@ -964,17 +1196,17 @@ const App = () => {
                         className="w-20 px-3 py-1 border border-blue-500 rounded-md text-center font-semibold text-blue-300 bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
-                     <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        value={item.frekuensi}
-                        onChange={(e) => handleSliderChange(index, e.target.value)}
-                        className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        style={{
-                            background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${(item.frekuensi / 50) * 100}%, #6b7280 ${(item.frekuensi / 50) * 100}%, #6b7280 100%)`
-                        }}
-                      />
+                    <input
+                      type="range"
+                      min="0"
+                      max="50"
+                      value={item.frekuensi}
+                      onChange={(e) => handleSliderChange(index, e.target.value)}
+                      className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      style={{
+                          background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${(item.frekuensi / 50) * 100}%, #6b7280 ${(item.frekuensi / 50) * 100}%, #6b7280 100%)`
+                      }}
+                    />
                   </motion.div>
                 ))}
               </div>
@@ -1054,7 +1286,6 @@ const App = () => {
         </div>
       );
     }
-
     if (activeTab === 'kuis' && currentQuiz) {
       const score = calculateScore();
       const scorePercentage = (score / activeQuizData.length) * 100;
@@ -1170,7 +1401,6 @@ const App = () => {
         </div>
       );
     }
-
     const currentMateri = materi[activeTab]?.[activeSubMenu];
     if (currentMateri) {
       return (
@@ -1184,32 +1414,36 @@ const App = () => {
         </motion.div>
       );
     }
-
-    // Fallback jika tidak ada konten (seharusnya tidak terjadi jika 'home' ada)
     return null;
   };
 
   return (
     <div 
       className="min-h-screen font-sans" 
-      // GANTI: Menggunakan gradien CSS yang stabil sebagai latar belakang
       style={{ 
-        background: 'linear-gradient(180deg, rgba(6,0,16,1) 0%, rgba(42,0,64,1) 100%)', // Gradien dari #060010 ke #2a0040
+        background: 'linear-gradient(180deg, rgba(6,0,16,1) 0%, rgba(42,0,64,1) 100%)',
         color: 'white' 
       }}
     >
-      {/* HAPUS: Komponen LiquidEther dihapus dari sini */}
-
+    <DotGrid 
+      dotSize={7}
+      gap={20}
+      baseColor="#8b5cf6"
+      activeColor="#a78bfa"
+      proximity={150}
+      shockRadius={300}
+      shockStrength={4}
+      resistance={500}
+      returnDuration={1.5}
+      className="opacity-15"
+    />
       <style>{`
         .confetti-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; z-index: 10000; pointer-events: none; }
         .confetti { position: absolute; width: 8px; height: 16px; top: -20px; animation: fall linear infinite; }
         @keyframes fall { 0% { transform: translateY(0vh) rotate(0deg); } 100% { transform: translateY(100vh) rotate(720deg); } }
-        
         input[type=number]::-webkit-inner-spin-button, 
         input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
-        
-        /* Gaya Prose untuk Mode Gelap */
         .prose-invert {
           --tw-prose-body: #d1d5db;
           --tw-prose-headings: #ffffff;
@@ -1228,9 +1462,6 @@ const App = () => {
           --tw-prose-th-borders: #4b5563;
           --tw-prose-td-borders: #374151;
         }
-
-        /* Hapus semua style .bento-section, .card-responsive, .card--border-glow, .particle, dll. */
-        
         .line-clamp-2 {
           display: -webkit-box;
           -webkit-box-orient: vertical;
@@ -1238,16 +1469,9 @@ const App = () => {
           overflow: hidden;
           text-overflow: ellipsis;
         }
-
       `}</style>
-
-      {/* HAPUS: Sidebar dan Header */}
-
-      <div className="flex-1 flex flex-col relative z-10"> {/* Pastikan konten utama di atas background (z-10) */}
-        {/* HAPUS: Header Mobile */}
-
+      <div className="flex-1 flex flex-col relative z-10">
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
-            {/* MODIFIKASI: Tombol kembali dan sub-menu */}
             {activeTab !== 'home' && (
               <div className="mb-6">
                 <button
@@ -1261,8 +1485,6 @@ const App = () => {
                   <ArrowLeft className="w-5 h-5" />
                   Kembali ke Menu
                 </button>
-
-                {/* Navigasi Sub-menu */}
                 {menuItems.find(m => m.id === activeTab)?.subMenus && (
                   <nav className="flex flex-wrap gap-2 mt-4 border-b-2 border-gray-800 pb-4">
                     {menuItems.find(m => m.id === activeTab).subMenus.map(sub => (
@@ -1282,8 +1504,6 @@ const App = () => {
                 )}
               </div>
             )}
-            
-            {/* MODIFIKASI: Konten dirender tanpa padding/border/shadow tambahan */}
             <div className="min-h-full">
               {renderContent()}
             </div>
@@ -1294,6 +1514,3 @@ const App = () => {
 };
 
 export default App;
-
-
-
