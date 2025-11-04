@@ -1126,14 +1126,17 @@ const App = () => {
               animate={{ y: 0, opacity: 1 }}
               className="text-3xl sm:text-5xl font-bold text-center mb-4"
             >
-              Selamat Datang di
+              Web Statistika
             </motion.h2>
             <TextType
               as="h1"
               text={[
                 "Platform Statistika Dasar",
                 "Mulai Belajar Mean, Median, Modus",
-                "Uji Pemahaman Anda!"
+                "Uji Pemahaman Anda!",
+                "Kelompok 7",
+                "When yah",
+                "Mana Ijazahnya lil"
               ]}
               typingSpeed={75}
               pauseDuration={2000}
@@ -1460,7 +1463,7 @@ const App = () => {
           --tw-prose-pre-code: #d1d5db;
           --tw-prose-pre-bg: #1f2937;
           --tw-prose-th-borders: #4b5563;
-          --tw-prose-td-borders: #374151;
+          --tw-ose-td-borders: #374151;
         }
         .line-clamp-2 {
           display: -webkit-box;
